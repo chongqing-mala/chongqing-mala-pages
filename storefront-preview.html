@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ฉงชิ่งหม่าล่าทอด</title>
+  <style>
+    body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f0f8f3;color:#154335;font:1rem system-ui,sans-serif}
+    main{margin:1rem;padding:1.5rem;max-width:27rem;text-align:center;background:white;border-radius:1rem}
+    a{color:#075a44;font-weight:bold}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>ฉงชิ่งหม่าล่าทอด</h1>
+    <p id="boot-status" role="status">กำลังโหลดเมนู…</p>
+    <a href="./">เปิดหน้าสั่งอาหาร</a>
+  </main>
+  <script>
+    (() => {
+      const appUrl = 'https://script.google.com/macros/s/AKfycbybIMioJOWDk1ZKjC1a9EseOjzFbyJZDbiYsSI4eE8jJaqsGcREkU8QfLcZ73anCAOVyQ/exec';
+      const load = document.createElement('script');
+      let done = false;
+      const timer = setTimeout(fail, 12000);
+
+      function fail() {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        load.remove();
+        document.getElementById('boot-status').textContent = 'โหลดเมนูฉบับทดสอบไม่สำเร็จ เปิดหน้าสั่งอาหารที่ใช้งานอยู่ได้ด้านล่าง';
+      }
+
+      window.__malaStorefrontBootstrap = function (html) {
+        if (done) return;
+        if (typeof html !== 'string' || !html.includes('content="customer-only"')) {
+          fail();
+          return;
+        }
+        done = true;
+        clearTimeout(timer);
+        // Render in this document, retaining the GitHub Pages origin and LIFF URL.
+        document.open();
+        document.write(html);
+        document.close();
+      };
+      load.onerror = fail;
+      load.src = appUrl + '?action=customerPagesBootstrap&minute=' + Math.floor(Date.now() / 60000);
+      document.head.appendChild(load);
+    })();
+  </script>
+</body>
+</html>
