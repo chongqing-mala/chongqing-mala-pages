@@ -2584,12 +2584,13 @@
 
       var custSec = document.getElementById('SectionCustomer');
       var isCustView = !!forceCustomerCleanView || isStrictCustomerLocked || (custSec && !custSec.classList.contains('hidden'));
+      if (modalEl) modalEl.classList.toggle('customer-receipt', !!isCustView);
 
       if (modalPaper) modalPaper.innerHTML = html;
       if (printArea) printArea.innerHTML = html;
 
       if (isCustView) {
-        if (titleEl) titleEl.textContent = 'ใบเสร็จรับเงิน • คิว ' + (order.queueNumber || '-') + ' (#' + (order.orderId || '-') + ')';
+        if (titleEl) titleEl.textContent = 'ใบเสร็จรับเงิน • คิว ' + (order.queueNumber || '-');
         if (subEl) subEl.textContent = 'สถานะออเดอร์: ' + (order.status || 'รอทอด') + ' • แสดงหน้านี้เพื่อรับอาหารได้เลยครับ';
         if (printActionsEl) printActionsEl.classList.add('hidden');
         if (custCloseBtnEl) custCloseBtnEl.classList.remove('hidden');
@@ -2998,6 +2999,11 @@
     var customerTrackedOrderIds = [];
     var customerTrackerQuery = '';
 
+    function showCustomerStatusSync(text) {
+      var label = document.getElementById('CustomerStatusSyncInfo');
+      if (label) label.textContent = text;
+    }
+
     function saveCustomerTrackedOrder(order) {
       if (!order || !order.orderId) return;
       try {
@@ -3038,6 +3044,9 @@
         bodyEl.classList.toggle('hidden');
       }
       renderCustomerOrderTracker();
+      if (!bodyEl.classList.contains('hidden') && typeof window.triggerCloudSyncNow === 'function') {
+        window.triggerCloudSyncNow();
+      }
     }
 
     function searchCustomerOrderStatus() {
@@ -4666,16 +4675,27 @@
                 }
                 updateCustomerLoyaltyDisplay();
               }
-              if (data.orders && data.orders.length > 0) {
-                var srvOrders = [];
-                for (var oi = 0; oi < data.orders.length; oi++) {
-                  var normOrd = normalizeServerOrderObj(data.orders[oi], oi);
-                  if (normOrd) srvOrders.push(normOrd);
-                }
-                ordersList = srvOrders;
+              if (Array.isArray(data.orders)) {
+                loadCustomerTrackedOrdersFromStorage();
+                var ownIds = new Set(customerTrackedOrderIds);
+                var localOrders = new Map(ordersList.filter(function(order) {
+                  return ownIds.has(order.orderId);
+                }).map(function(order) { return [order.orderId, order]; }));
+                var srvOrders = data.orders.map(function(remote, index) {
+                  var previous = localOrders.get(remote.orderId);
+                  if (!previous) return normalizeServerOrderObj(remote, index);
+                  localOrders.delete(remote.orderId);
+                  // Public responses intentionally omit item, payment, and customer details.
+                  return Object.assign({}, previous, remote);
+                }).filter(Boolean);
+                ordersList = srvOrders.concat(Array.from(localOrders.values()));
                 saveStateToStorage();
                 renderOrderQueue();
                 updateQueueBadge();
+                renderCustomerOrderTracker();
+                showCustomerStatusSync('อัปเดตล่าสุด ' + new Date().toLocaleTimeString('th-TH', {
+                  timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit', second: '2-digit'
+                }));
                 if (pendingDeepLinkViewGlobal || pendingDeepLinkView) {
                   handleDeepLinkOrderAction(pendingDeepLinkViewGlobal || pendingDeepLinkView, pendingDeepLinkOrderIdGlobal || pendingDeepLinkOrderId);
                 }
@@ -4722,29 +4742,49 @@
           }
         }, 5000);
       } else {
-        window.handleInitialServerPayload = handleInitialServerPayload;
+        var syncing = false;
+        var requestNumber = 0;
         var triggerCloudSync = function() {
+          if (syncing || document.hidden) return;
+          var restApiUrl;
           try {
-            var restApiUrl = detectActiveWebAppBaseUrl();
-            if (restApiUrl && restApiUrl.indexOf('script.google.com') !== -1) {
-              if (typeof fetch === 'function') {
-                fetch(restApiUrl + (restApiUrl.indexOf('?') === -1 ? '?' : '&') + 'action=getInitialData&_t=' + new Date().getTime())
-                  .then(function(r) { return r.json(); })
-                  .then(handleInitialServerPayload)
-                  .catch(function() {});
-              }
-              var oldScript = document.getElementById('CloudJsonpSyncScript');
-              if (oldScript && oldScript.parentNode) oldScript.parentNode.removeChild(oldScript);
-              var jsonpScript = document.createElement('script');
-              jsonpScript.id = 'CloudJsonpSyncScript';
-              jsonpScript.src = restApiUrl + (restApiUrl.indexOf('?') === -1 ? '?' : '&') + 'action=getInitialData&callback=handleInitialServerPayload&_t=' + new Date().getTime();
-              document.head.appendChild(jsonpScript);
+            restApiUrl = new URL(detectActiveWebAppBaseUrl());
+            if (restApiUrl.protocol !== 'https:' || restApiUrl.hostname !== 'script.google.com') throw new Error('Invalid API');
+          } catch (error) {
+            showCustomerStatusSync('ยังเชื่อมต่อระบบสถานะไม่ได้');
+            return;
+          }
+          syncing = true;
+          showCustomerStatusSync('กำลังอัปเดตสถานะ…');
+          var callback = 'cqStatusSync' + (++requestNumber);
+          restApiUrl.searchParams.set('action', 'getInitialData');
+          restApiUrl.searchParams.set('callback', callback);
+          restApiUrl.searchParams.set('_t', String(Date.now()));
+          var script = document.createElement('script');
+          var timer;
+          function finish(data) {
+            clearTimeout(timer);
+            script.remove();
+            delete window[callback];
+            syncing = false;
+            if (!data || !Array.isArray(data.orders)) {
+              showCustomerStatusSync('อัปเดตไม่สำเร็จ กดลองใหม่ได้');
+              return;
             }
-          } catch (eRest) {}
+            handleInitialServerPayload(data);
+          }
+          window[callback] = finish;
+          script.onerror = function() { finish(null); };
+          timer = setTimeout(function() { finish(null); }, 10000);
+          script.src = restApiUrl.toString();
+          document.head.appendChild(script);
         };
         window.triggerCloudSyncNow = triggerCloudSync;
         triggerCloudSync();
         setInterval(triggerCloudSync, 8000);
+        document.addEventListener('visibilitychange', function() {
+          if (!document.hidden) triggerCloudSync();
+        });
       }
     }
 
@@ -5343,6 +5383,7 @@
                   🔍 ค้นหา
                 </button>
               </div>
+              <p id="CustomerStatusSyncInfo" class="text-xs text-slate-600" role="status" aria-live="polite"></p>
               <div id="CustomerTrackedOrdersList" class="space-y-2">
                 <!-- Rendered by renderCustomerOrderTracker() -->
               </div>
@@ -6939,6 +6980,70 @@ function getSheetRowsAsObjects(sheet) {
 #ModalReceiptPaper img{max-width:100%;height:auto}
 #ModalReceiptPaper img[alt*=QR],#ModalReceiptPaper img[alt*=qr],#ModalReceiptPaper img[alt*=ชำระ]{width:42mm!important;height:42mm!important;object-fit:contain!important;image-rendering:pixelated!important}
 @media print{#ModalReceiptPaper{width:58mm!important;max-width:58mm!important;margin:0 auto!important;padding:3mm!important;border-radius:0!important;box-shadow:none!important;font-size:11px!important}}
+@media screen {
+/* Customer confirmation receipt: center the panel and paper independently. */
+#ReceiptModal.customer-receipt:not(.hidden) {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
+    max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+}
+#ReceiptModal.customer-receipt > div {
+  width: 100%;
+  max-width: 420px;
+  min-width: 0;
+  max-height: calc(100vh - 28px);
+  max-height: calc(100dvh - 28px);
+  margin: 0 auto;
+  padding: clamp(12px, 4vw, 20px);
+  overscroll-behavior: contain;
+}
+#ReceiptModal.customer-receipt > div > div:first-child {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: center;
+  padding-inline: 36px;
+  text-align: center;
+}
+#ReceiptModal.customer-receipt > div > div:first-child h3 {
+  justify-content: center;
+  overflow-wrap: anywhere;
+}
+#ReceiptModal.customer-receipt > div > div:first-child > button {
+  position: absolute;
+  inset: 0 0 auto auto;
+}
+#ReceiptModal.customer-receipt #ModalReceiptSlipBox {
+  flex-direction: column;
+  justify-content: center;
+  text-align: center;
+}
+#ReceiptModal.customer-receipt #ModalReceiptSlipBox > div {
+  flex-direction: column;
+  width: 100%;
+}
+#ReceiptModal.customer-receipt #ModalReceiptSlipStatus {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+#ReceiptModal.customer-receipt #ModalReceiptPaper > div {
+  margin-inline: auto !important;
+  padding-inline: .75mm !important;
+}
+#ReceiptModal.customer-receipt #ModalReceiptPaper > div > :is(div):not(table) {
+  margin-inline: 0 !important;
+  padding-inline: 0 !important;
+  text-align: center;
+}
+#ReceiptModal.customer-receipt #ModalReceiptPaper > div > table {
+  margin-inline: auto;
+}
+}
 </style>
 <script>(function(){var m=document.getElementById('CustomerPaymentModal');if(!m)return;var cash=Array.from(m.querySelectorAll('button')).find(function(b){return b.textContent.indexOf('ชำระเงินสดเมื่อรับอาหาร')!==-1});if(cash)cash.remove();var pay=Array.from(m.querySelectorAll('button')).find(function(b){return b.getAttribute('onclick')==='confirmCustomerPaidOrder()'});if(pay)pay.innerHTML='<span>💳</span><span>จ่ายเลย</span>';})();</script>
 <script>(function(){var b=document.getElementById("CustomerBasketBar");if(!b)return;var update=function(){Array.from(b.querySelectorAll("button")).forEach(function(x){if(x.textContent.indexOf("ชำระเงิน QR")!==-1)x.innerHTML="💳 จ่ายเลย"})};update();if("MutationObserver" in window)new MutationObserver(update).observe(b,{childList:true,subtree:true});})();</script></body>
