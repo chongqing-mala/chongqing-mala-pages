@@ -3000,6 +3000,79 @@
 
     var customerTrackedOrderIds = [];
     var customerTrackerQuery = '';
+
+    var customerFastStatusBusy = false;
+    var customerFastStatusSequence = 0;
+
+    function refreshCustomerStatusFast(direct) {
+      if (customerFastStatusBusy || !isStrictCustomerLocked || (!direct && document.hidden)) return;
+      loadCustomerTrackedOrdersFromStorage();
+      var ids = customerTrackedOrderIds.slice(0, 10).filter(function(id) {
+        if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{6,80}$/.test(id)) return false;
+        var order = findOrderById(id);
+        if (direct || !order) return true;
+        var time = new Date(order.createdAt).getTime();
+        return order.status !== 'เสร็จสิ้น' && (!Number.isFinite(time) || Date.now() - time < 24 * 60 * 60 * 1000);
+      });
+      var exact = String(customerTrackerQuery || '').trim();
+      if (/^CQ-[A-Za-z0-9_-]{3,77}$/i.test(exact) && ids.indexOf(exact) < 0) {
+        var found = ordersList.find(function(order) { return String(order.orderId).toLowerCase() === exact.toLowerCase(); });
+        ids.unshift(found ? found.orderId : exact);
+      }
+      if (!ids.length) return;
+      customerFastStatusBusy = true;
+      var timer;
+      var cleanup = function() {};
+      var settled = false;
+      function finish(data) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        cleanup();
+        customerFastStatusBusy = false;
+        if (!data || !Array.isArray(data.orders) || !data.orders.length) return;
+        var changed = false;
+        data.orders.forEach(function(remote) {
+          var local = findOrderById(remote.orderId);
+          if (!local || (local.status === remote.status && local.queueNumber === remote.queueNumber && local.createdAt === remote.createdAt)) return;
+          local.status = remote.status;
+          local.queueNumber = remote.queueNumber;
+          local.createdAt = remote.createdAt;
+          changed = true;
+        });
+        if (changed) {
+          saveStateToStorage();
+          renderCustomerOrderTracker();
+          if (typeof showCustomerStatusSync === 'function') {
+            showCustomerStatusSync('อัปเดตล่าสุด ' + new Date().toLocaleTimeString('th-TH', {timeZone: 'Asia/Bangkok'}));
+          }
+        }
+      }
+      timer = setTimeout(function() { finish(null); }, 9000);
+      if (typeof google !== 'undefined' && google.script && google.script.run) {
+        google.script.run.withSuccessHandler(finish).withFailureHandler(function() { finish(null); }).getCustomerStatusFeed(ids);
+        return;
+      }
+      var endpoint;
+      try {
+        endpoint = new URL(detectActiveWebAppBaseUrl());
+        if (endpoint.protocol !== 'https:' || endpoint.hostname !== 'script.google.com') throw Error('URL');
+      } catch (error) { finish(null); return; }
+      var name = 'cqFastStatus' + Date.now() + String(++customerFastStatusSequence % 100).padStart(2, '0');
+      endpoint.searchParams.set('action', 'customerStatusFeed');
+      endpoint.searchParams.set('callback', name);
+      endpoint.searchParams.set('ids', ids.slice(0, 10).join(','));
+      var script = document.createElement('script');
+      window[name] = finish;
+      cleanup = function() { script.remove(); delete window[name]; };
+      script.onerror = function() { finish(null); };
+      script.src = endpoint.toString();
+      document.head.appendChild(script);
+    }
+
+    setInterval(function() { refreshCustomerStatusFast(false); }, 2000);
+    document.addEventListener('visibilitychange', function() { if (!document.hidden) refreshCustomerStatusFast(true); });
+
     var customerServerOrderIds = new Set();
     var customerDayFormatter = new Intl.DateTimeFormat('en-CA', {
       timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit'
@@ -3073,6 +3146,7 @@
       var bodyEl = document.getElementById('CustomerOrderTrackerBody');
       if (bodyEl) bodyEl.classList.remove('hidden');
       renderCustomerOrderTracker();
+      refreshCustomerStatusFast(true);
       if (typeof window.triggerCloudSyncNow === 'function') {
         window.triggerCloudSyncNow();
       }
