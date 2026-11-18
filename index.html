@@ -1919,6 +1919,20 @@
     }
 
     function submitCustomerLineOrder() {
+      var nameInput = document.getElementById('CustName');
+      var orderCustomerName = nameInput ? nameInput.value.trim() : '';
+      var nameError = document.getElementById('CustNameError');
+      if (!orderCustomerName) {
+        if (nameError) nameError.hidden = false;
+        if (nameInput) {
+          nameInput.setAttribute('aria-invalid', 'true');
+          nameInput.scrollIntoView({block: 'center'});
+          nameInput.focus({preventScroll: true});
+        }
+        return;
+      }
+      if (nameError) nameError.hidden = true;
+      if (nameInput) nameInput.removeAttribute('aria-invalid');
       if (window.liff && !lineLiffIdentityReady) {
         if (lineLiffSubmitPending) return;
         lineLiffSubmitPending = true;
@@ -2014,7 +2028,7 @@
         lineUserId: lineCustomerUserId || '',
         orderType: orderType,
         tableNo: (tblEl && tblEl.value ? tblEl.value : 'มารับเอง'),
-        customerName: (nameEl && nameEl.value ? nameEl.value : 'ลูกค้า LINE OA'),
+        customerName: orderCustomerName,
         customerPhone: custPhoneVal,
         spiceLevel: (spiceEl ? spiceEl.value : 'โรยพริกกลาง'),
         seasoningStyle: (seasEl ? seasEl.value : 'โรยพริก'),
@@ -5493,8 +5507,9 @@
               <label class="text-xs font-bold text-slate-700 block">3. ชื่อผู้สั่ง &amp; เบอร์โทรติดต่อ</label>
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <div>
-                  <label class="text-[11px] text-slate-500 block mb-0.5">ชื่อคุณลูกค้า</label>
-                  <input id="CustName" type="text" placeholder="กรอกชื่อ (ถ้าต้องการ)" class="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-1.5 text-xs text-slate-800 outline-none" />
+                  <label for="CustName" class="text-[11px] text-slate-700 font-semibold block mb-0.5">ชื่อผู้สั่ง <span class="text-red-700">(จำเป็น)</span></label>
+                  <input id="CustName" type="text" required autocomplete="name" aria-describedby="CustNameError" oninput="if(this.value.trim()){this.removeAttribute('aria-invalid');document.getElementById('CustNameError').hidden=true;}" placeholder="กรอกชื่อผู้สั่ง" class="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-1.5 text-xs text-slate-800 outline-none" />
+                  <p id="CustNameError" hidden role="alert" class="mt-1 text-xs font-semibold text-red-700">กรุณากรอกชื่อผู้สั่ง</p>
                 </div>
                 <div>
                   <label class="text-[11px] text-slate-500 block mb-0.5">📱 เบอร์โทรศัพท์</label>
