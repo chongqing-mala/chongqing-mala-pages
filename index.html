@@ -4,6 +4,11 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>ฉงชิ่งหม่าล่าทอด</title>
+  <style id="CustomerPagesFirstPaint">
+    #TopAdminHeader, #TopAdminSubBar, #SectionPos, #SectionQueue, #SectionAdmin, #SectionLine,
+    #CustomerStandaloneExitBar, #CustomerAdminPreviewBar { display: none !important; }
+    #SectionCustomer { display: block !important; }
+  </style>
   <script src="https://cdn.tailwindcss.com/3.4.17"></script>
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -552,7 +557,7 @@
     var IMAGE_CACHE = {};
     var appInitialized = false;
     var __lastActionTime = 0;
-    var isStrictCustomerLocked = false;
+    var isStrictCustomerLocked = true;
     var currentCustomerCategory = "ทั้งหมด";
     var customerRedeemPointsActive = false;
 
@@ -2004,7 +2009,7 @@
       var now = new Date();
       var timeStr = now.toTimeString().slice(0, 5) + ' น.';
       var queueNo = 'L' + ('0' + (ordersList.length + 1)).slice(-2);
-      var orderId = 'CQ-LINE-' + Math.floor(1000 + Math.random() * 8999);
+      var orderId = 'CQ-' + crypto.randomUUID();
 
       var tblEl = document.getElementById('CustTableNo');
       var nameEl = document.getElementById('CustName');
@@ -2998,6 +3003,21 @@
 
     var customerTrackedOrderIds = [];
     var customerTrackerQuery = '';
+    var customerServerOrderIds = new Set();
+    var customerDayFormatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit'
+    });
+
+    function isCustomerOrderToday(order) {
+      var time = new Date(order.createdAt);
+      return !isNaN(time.getTime()) && customerDayFormatter.format(time) === customerDayFormatter.format(new Date());
+    }
+
+    function customerTrackerText(value) {
+      var span = document.createElement('span');
+      span.textContent = String(value || '');
+      return span.innerHTML;
+    }
 
     function showCustomerStatusSync(text) {
       var label = document.getElementById('CustomerStatusSyncInfo');
@@ -3070,37 +3090,17 @@
       if (!listEl) return;
 
       var q = String(customerTrackerQuery || '').toLowerCase().replace(/\s+/g, '');
-      var qDigits = q.replace(/[^0-9]/g, '');
-      var matched = [];
-      var seenIds = {};
-
-      // 1. Always match orders saved on this customer's device
-      for (var i = 0; i < customerTrackedOrderIds.length; i++) {
-        var tid = customerTrackedOrderIds[i];
-        var found = findOrderById(tid);
-        if (found && !seenIds[found.orderId]) {
-          seenIds[found.orderId] = true;
-          matched.push(found);
-        }
-      }
-
-      // 2. If user typed a phone number, queue number (e.g. L24), or order ID in search box
-      if (q) {
-        matched = [];
-        seenIds = {};
-        for (var j = 0; j < ordersList.length; j++) {
-          var ord = ordersList[j];
-          var oid = String(ord.orderId || '').toLowerCase();
-          var qno = String(ord.queueNumber || '').toLowerCase();
-          var cname = String(ord.customerName || '').toLowerCase();
-          var cphone = String(ord.customerPhone || '').replace(/[^0-9]/g, '');
-          var isMatch = (oid.indexOf(q) !== -1) || (qno === q) || (cname.indexOf(q) !== -1) || (qDigits.length >= 4 && cphone.indexOf(qDigits) !== -1);
-          if (isMatch && !seenIds[ord.orderId]) {
-            seenIds[ord.orderId] = true;
-            matched.push(ord);
-          }
-        }
-      }
+      var ownIds = new Set(customerTrackedOrderIds);
+      var matched = ordersList.filter(function(order) {
+        if (!customerServerOrderIds.has(order.orderId)) return false;
+        var ownToday = ownIds.has(order.orderId) && isCustomerOrderToday(order);
+        if (!q) return ownToday;
+        var exactId = String(order.orderId || '').toLowerCase() === q;
+        var exactQueue = String(order.queueNumber || '').toLowerCase() === q;
+        var phone = String(order.customerPhone || '').replace(/[^0-9]/g, '');
+        var phoneQuery = q.replace(/[^0-9]/g, '');
+        return exactId || (ownToday && (exactQueue || (phoneQuery.length >= 9 && phoneQuery === phone)));
+      });
 
       if (badgeEl) {
         if (matched.length > 0) {
@@ -3115,7 +3115,7 @@
 
       if (matched.length === 0) {
         listEl.innerHTML = '<div class="text-center py-4 px-3 bg-slate-50 border border-dashed border-slate-200 rounded-xl text-xs text-slate-500">' +
-          (q ? 'ไม่พบออเดอร์ที่ตรงกับ "' + customerTrackerQuery + '" กรุณาตรวจสอบเบอร์โทรหรือเลขคิวอีกครั้งครับ' : 'ยังไม่มีออเดอร์ล่าสุดในเครื่องนี้ หรือกรอกเบอร์โทร / เลขคิวด้านบนเพื่อค้นหาสถานะออเดอร์ได้เลยครับ') +
+          (q ? 'ไม่พบออเดอร์ กรุณาใช้เลขออเดอร์เต็มจากใบเสร็จ หรือเลขคิววันนี้ของเครื่องนี้' : 'ยังไม่มีออเดอร์วันนี้ในเครื่องนี้ หากต้องการดูคิวเก่า ให้กรอกเลขออเดอร์เต็มจากใบเสร็จ') +
         '<' + '/div>';
         return;
       }
@@ -3150,7 +3150,8 @@
         }
 
         var itemsSummary = [];
-        if (o.items && o.items.length > 0) {
+        var hasLocalReceipt = ownIds.has(o.orderId) && Array.isArray(o.items) && o.items.length > 0;
+        if (hasLocalReceipt) {
           for (var k = 0; k < o.items.length; k++) {
             itemsSummary.push(o.items[k].name + ' x' + o.items[k].qty);
           }
@@ -3161,8 +3162,8 @@
             '<div class="flex items-center gap-2">' +
               '<span class="px-2.5 py-1 rounded-xl bg-[#00B14F] text-white font-extrabold text-sm grab-solid-green">คิว ' + (o.queueNumber || '-') + '<' + '/span>' +
               '<div>' +
-                '<div class="text-xs font-extrabold text-slate-900">' + (o.customerName || 'ลูกค้า') + '<' + '/div>' +
-                '<div class="text-[10.5px] text-slate-500">' + (o.orderType || 'สั่งกลับบ้าน') + ' • ' + formatOrderTimeDisplay(o.createdAt) + '<' + '/div>' +
+                (hasLocalReceipt ? '<div class="text-xs font-extrabold text-slate-900">' + customerTrackerText(o.customerName || 'ลูกค้า') + '<' + '/div>' : '') +
+                '<div class="text-[10.5px] text-slate-500">' + customerTrackerText(o.orderType || 'สั่งกลับบ้าน') + ' • ' + formatOrderTimeDisplay(o.createdAt) + '<' + '/div>' +
               '<' + '/div>' +
             '<' + '/div>' +
             '<span class="px-2.5 py-1 rounded-full text-[11px] font-extrabold" style="' + stBadgeStyle + '">' + stLabel + '<' + '/span>' +
@@ -3184,18 +3185,18 @@
             '<' + '/div>' +
           '<' + '/div>' +
 
-          '<div class="bg-slate-50 rounded-xl p-2.5 text-xs space-y-1 border border-slate-100">' +
+          (hasLocalReceipt ? '<div class="bg-slate-50 rounded-xl p-2.5 text-xs space-y-1 border border-slate-100">' +
             '<div class="text-slate-700 font-medium line-clamp-2">🍢 <strong>รายการ (' + (o.totalSkewers || 0) + ' ไม้):<' + '/strong> ' + itemsSummary.join(', ') + '<' + '/div>' +
             '<div class="flex flex-wrap items-center justify-between gap-1 pt-1 border-t border-slate-200/70">' +
               '<span class="text-[11px] text-slate-500">🌶️ ' + (o.spiceLevel || 'โรยพริกกลาง') + ' (' + (o.seasoningStyle || 'โรยพริก') + ')<' + '/span>' +
               '<span class="text-sm font-extrabold text-[#008037]">ยอดสุทธิ ฿' + (o.grandTotal || 0) + '<' + '/span>' +
             '<' + '/div>' +
-          '<' + '/div>' +
+          '<' + '/div>' : '') +
 
-          '<div class="grid grid-cols-3 gap-1.5 pt-0.5">' +
-            '<button type="button" onclick="openReceiptModal(findOrderById(\'' + o.orderId + '\'), \'\', true)" class="py-1.5 px-2 rounded-xl bg-[#00B14F] hover:bg-[#009944] text-white font-bold text-[11px] flex items-center justify-center gap-1 transition grab-solid-green">' +
+          '<div class="grid ' + (hasLocalReceipt ? 'grid-cols-3' : 'grid-cols-2') + ' gap-1.5 pt-0.5">' +
+            (hasLocalReceipt ? '<button type="button" onclick="openReceiptModal(findOrderById(\'' + o.orderId + '\'), \'\', true)" class="py-1.5 px-2 rounded-xl bg-[#00B14F] hover:bg-[#009944] text-white font-bold text-[11px] flex items-center justify-center gap-1 transition grab-solid-green">' +
               '<span>🧾<' + '/span><span>ใบเสร็จ/เลขออเดอร์<' + '/span>' +
-            '<' + '/button>' +
+            '<' + '/button>' : '') +
             '<button type="button" onclick="testCustomerStatusVoiceAlert(\'' + o.orderId + '\')" class="py-1.5 px-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 font-bold text-[11px] flex items-center justify-center gap-1 transition">' +
               '<span>🔊<' + '/span><span>เสียงเรียกคิว<' + '/span>' +
             '<' + '/button>' +
@@ -4676,6 +4677,7 @@
                 updateCustomerLoyaltyDisplay();
               }
               if (Array.isArray(data.orders)) {
+                customerServerOrderIds = new Set(data.orders.map(function(order) { return order.orderId; }));
                 loadCustomerTrackedOrdersFromStorage();
                 var ownIds = new Set(customerTrackedOrderIds);
                 var localOrders = new Map(ordersList.filter(function(order) {
@@ -5378,7 +5380,7 @@
 
             <div id="CustomerOrderTrackerBody" class="hidden mt-2.5 pt-2.5 border-t border-slate-200 space-y-2.5">
               <div class="flex gap-1.5">
-                <input id="CustOrderSearchInput" type="text" placeholder="กรอกเบอร์โทร หรือ เลขคิว (เช่น 089-555-8899 หรือ L24)" onkeydown="if(event.key==='Enter'){searchCustomerOrderStatus();}" class="flex-1 bg-white border border-slate-300 rounded-xl px-3 py-1.5 text-xs text-slate-800 outline-none" />
+                <input id="CustOrderSearchInput" type="text" placeholder="เลขออเดอร์เต็ม หรือเลขคิววันนี้ของเครื่องนี้" onkeydown="if(event.key==='Enter'){searchCustomerOrderStatus();}" class="flex-1 bg-white border border-slate-300 rounded-xl px-3 py-1.5 text-xs text-slate-800 outline-none" />
                 <button type="button" onclick="searchCustomerOrderStatus()" class="px-3 py-1.5 rounded-xl bg-[#00B14F] hover:bg-[#009944] text-white font-bold text-xs shrink-0 shadow-sm grab-solid-green">
                   🔍 ค้นหา
                 </button>
